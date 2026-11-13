@@ -1,0 +1,24 @@
+# 构建产物与二进制（Bin 内为编译输出，build 为影子构建目录）
+Bin/
+build/
+*.o
+*.obj
+*.exe
+*.dll
+*.a
+*.so
+*.moc
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+
+# Qt Creator 本地工程状态
+*.pro.user
+*.pro.user.*
+.qtcreator/
+
+# 编辑器与系统文件
+.vscode/
+.vs/
+Thumbs.db
+desktop.ini
