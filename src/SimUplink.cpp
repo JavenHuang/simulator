@@ -146,6 +146,12 @@ void SimUplink::handleFeedback(quint32 terminalId, const QByteArray &body)
         s->taskInFlight = false;
         _host->onTaskFinished(terminalId, static_cast<int>(fb.result));
         break;
+    case DogProtocol::MR_CANCELLED:
+        // 终端补发的"旧任务被抢占"：被抢占的任务 taskId 与新任务不同，
+        // 一般在上面的 taskId 过滤就返回了；真走到这里只收敛在飞标记，
+        // 不重发航点（接管的新任务会自己产生 MR_ARRIVED）。
+        s->taskInFlight = false;
+        break;
     default:
         break;  // MR_ACCEPTED / MR_MOVING 等待后续反馈
     }
