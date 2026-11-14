@@ -32,6 +32,7 @@ void SimController::printHelp()
     qInfo() << "  mapoff <id>              关闭地图坐标，回到原始局部坐标";
     qInfo() << "  auto                     切换到自动巡航模式";
     qInfo() << "  manual                   切换到手动命令模式";
+    qInfo() << "  rtkclear                 清空地图上的差分原始点轨迹（现场重新走直线前用）";
     qInfo() << "  help                     显示本帮助";
     qInfo() << "  quit                     退出";
     qInfo() << "==============================";
@@ -55,6 +56,11 @@ void SimController::executeCommand(const QString &line)
     if (cmd == "help" || cmd == "h" || cmd == "?")
     {
         printHelp();
+        return;
+    }
+    if (cmd == "rtkclear")
+    {
+        clearRtkTrail();
         return;
     }
     if (cmd == "auto")
