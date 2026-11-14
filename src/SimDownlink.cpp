@@ -30,9 +30,12 @@ SimDownlink::SimDownlink(MqLink *&mq, QMap<quint32, TermSession *> &sessions,
 
 bool SimDownlink::publish(quint16 msgType, quint32 terminalId, const QByteArray &body)
 {
-    if (!_mq)
+    // 只有 _mq 指针不够：MqLink::publish 在链路未就绪时是"静默丢弃"，
+    // 这里若照样返回 true，调用方会把 taskInFlight 置 1 并等一个永远不来的
+    // feedback，自动巡航就此卡死到人工介入。必须先判连接状态。
+    if (!_mq || !_mq->isConnected())
     {
-        qWarning() << "[Sim] MQ 链路未建立，报文丢弃 type=" << msgType;
+        qWarning() << "[Sim] MQ 链路未就绪，报文丢弃 type=" << msgType;
         return false;
     }
     DogProtocol::MessageHeader header(msgType, terminalId);

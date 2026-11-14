@@ -352,9 +352,13 @@ void SimController::sendMoveCmd(quint32 terminalId)
     if (!st.dogConnected || !st.controlAcquired)
         return;
 
-    const QPair<double, double> wp = _waypoints.at(s->wpIndex % _waypoints.size());
+    // 发送失败（链路未就绪）时不推进航点：否则每失败一次就跳过一个点，
+    // 现场表现是"航点莫名其妙被跳过"。留到下一帧状态包触发 onTerminalReady 再发。
+    const int idx = s->wpIndex % qMax(1, _waypoints.size());
+    const QPair<double, double> wp = _waypoints.at(idx);
+    if (!_down->waypoint(terminalId, wp.first, wp.second))
+        return;
     s->wpIndex = (s->wpIndex + 1) % qMax(1, _waypoints.size());
-    _down->waypoint(terminalId, wp.first, wp.second);
 }
 
 // ============================================================
