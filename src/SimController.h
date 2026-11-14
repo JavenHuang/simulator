@@ -6,6 +6,8 @@
 #include <QMap>
 #include <QString>
 #include <QJsonObject>
+#include <QVector>
+#include <QPointF>
 
 #include "Protocol/DogProtocol.h"
 #include "SimSession.h"
@@ -44,6 +46,38 @@ public:
     {
         return _uplink->panelOf(terminalId);
     }
+
+    // ------------------------------------------------------------
+    // 差分原始点（诊断用）：服务端在 MQ 上收到的每一帧 la 报文都原样记录
+    // 一份（不做 k/α 变换、不做平滑），供地图单独画一层。
+    // 用途：区分"差分点自己在跳"与"终端融合/标定算错"——
+    //   走直线时若这一层点在地图上来回跳格，而终端上传的地图轨迹平滑，
+    //   则量化台阶是源头；若这一层点平滑而地图轨迹发毛，则问题在融合。
+    // 坐标：直接是 la 帧里的原始 x/y（差分系，单位 m），未做任何变换。
+    // ------------------------------------------------------------
+    QVector<QPointF> rtkTrail(quint32 terminalId) const
+    {
+        return _rtkTrail.value(terminalId);
+    }
+    QPointF rtkLastPoint(quint32 terminalId) const
+    {
+        return _rtkLast.value(terminalId);
+    }
+    // 最近一帧相对上一帧的位移（m）——直观的"跳变量"
+    double rtkLastJumpM(quint32 terminalId) const
+    {
+        return _rtkJump.value(terminalId);
+    }
+    double rtkLastYawDeg(quint32 terminalId) const
+    {
+        return _rtkYawDeg.value(terminalId);
+    }
+    int rtkFrameCount(quint32 terminalId) const
+    {
+        return _rtkFrames.value(terminalId);
+    }
+    // 清空差分点轨迹（现场重新走直线前用）
+    void clearRtkTrail();
 
 signals:
     // 收到终端 calib 面板（带 terminalId，GUI 用 calibPanelOf(id) 取最新 JSON 原地刷新）
@@ -102,6 +136,9 @@ private:
     // 自动巡航：按航点列表顺序取下一个点，占满一圈后回到起点
     void sendMoveCmd(quint32 terminalId);
 
+    // la 差分帧：解析、入轨迹、按需打印（不参与控制逻辑）
+    void handleRtkFrame(const QByteArray &payload);
+
     MqLink *_mq;
     QTimer *_hbTimer;
     SimDownlink *_down;
@@ -123,6 +160,14 @@ private:
     bool _autoCruise;
 
     QMap<quint32, TermSession *> _sessions;
+
+    // 差分原始点缓存（每终端一条轨迹 + 最近帧指标）
+    QMap<quint32, QVector<QPointF> > _rtkTrail;
+    QMap<quint32, QPointF> _rtkLast;
+    QMap<quint32, double> _rtkJump;
+    QMap<quint32, double> _rtkYawDeg;
+    QMap<quint32, int> _rtkFrames;
+    QMap<quint32, qint64> _rtkLastLogMs;
 };
 
 #endif  // SIM_CONTROLLER_H

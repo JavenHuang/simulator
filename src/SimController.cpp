@@ -12,6 +12,42 @@
 #include <QDebug>
 #include <QTimer>
 #include <QCoreApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
+#include <QJsonParseError>
+#include <QDateTime>
+#include <cmath>
+
+namespace
+{
+// la 帧里的数值既可能是 number 也可能是 "1.23" 字符串，且不同服务端键名不同，
+// 这里按别名列表逐个试，取到第一个可用值。
+double rtkNum(const QJsonObject &o, const QStringList &keys, bool *found)
+{
+    for (int i = 0; i < keys.size(); ++i)
+    {
+        const QJsonValue v = o.value(keys.at(i));
+        if (v.isDouble())
+        {
+            if (found) *found = true;
+            return v.toDouble();
+        }
+        if (v.isString())
+        {
+            bool ok = false;
+            const double d = v.toString().trimmed().toDouble(&ok);
+            if (ok)
+            {
+                if (found) *found = true;
+                return d;
+            }
+        }
+    }
+    if (found) *found = false;
+    return 0.0;
+}
+}  // namespace
 
 SimController::SimController()
     : _mq(nullptr)
@@ -121,8 +157,129 @@ void SimController::onMqError(const QString &what)
 
 void SimController::onMqMessage(const QString &routingKey, const QByteArray &payload)
 {
+    // la 差分帧：终端只收不发，SimUplink 不认识它；这里单独截下来做地图诊断图层
+    if (routingKey == QLatin1String("la")
+        || routingKey.endsWith(QLatin1String(".la"))
+        || routingKey.endsWith(QLatin1String("/la")))
+    {
+        handleRtkFrame(payload);
+        return;
+    }
+
     // 分流、解包、打印都由解析器负责；需要业务动作时它回调本类
     _uplink->onMessage(routingKey, payload);
+}
+
+// ------------------------------------------------------------
+// la 差分帧：服务端接收诊断层
+// 只做"读出来、存下来、打到控制台"，不参与任何控制决策。
+// 键名兼容终端 RtkFrameReader 的同一套别名（x/posX/east、y/posY/south、
+// yaw/heading/angle/azimuth/dir），值可以是 number 也可以是数字字符串。
+// ------------------------------------------------------------
+void SimController::handleRtkFrame(const QByteArray &payload)
+{
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(payload, &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+    {
+        static int s_parseErr = 0;
+        if (s_parseErr++ < 5)
+            qWarning().noquote() << "[Rtk] la 帧不是合法 JSON:" << err.errorString()
+                                 << "原文前 120B:" << QString::fromUtf8(payload.left(120));
+        return;
+    }
+
+    QJsonObject o = doc.object();
+    // 兼容位姿套在 data 子对象里的服务端
+    if (!o.contains(QStringLiteral("x")) && o.value(QStringLiteral("data")).isObject())
+        o = o.value(QStringLiteral("data")).toObject();
+
+    bool okX = false;
+    bool okY = false;
+    bool okYaw = false;
+    const double x = rtkNum(o, QStringList() << QStringLiteral("x") << QStringLiteral("posX")
+                                             << QStringLiteral("east"), &okX);
+    const double y = rtkNum(o, QStringList() << QStringLiteral("y") << QStringLiteral("posY")
+                                             << QStringLiteral("south"), &okY);
+    const double yawDeg = rtkNum(o, QStringList() << QStringLiteral("yaw")
+                                                  << QStringLiteral("heading")
+                                                  << QStringLiteral("angle")
+                                                  << QStringLiteral("azimuth")
+                                                  << QStringLiteral("dir"), &okYaw);
+    if (!okX || !okY)
+    {
+        static int s_fieldErr = 0;
+        if (s_fieldErr++ < 5)
+            qWarning().noquote() << "[Rtk] la 帧缺少 x/y:" << QString::fromUtf8(payload.left(160));
+        return;
+    }
+
+    // 差分 ID → 被控终端；取不到或对不上本程序被控终端时，单终端联调直接归给它
+    bool okId = false;
+    const double idVal = rtkNum(o, QStringList() << QStringLiteral("diffId")
+                                                 << QStringLiteral("diff_id")
+                                                 << QStringLiteral("rtkId")
+                                                 << QStringLiteral("deviceId")
+                                                 << QStringLiteral("id"), &okId);
+    quint32 tid = okId ? static_cast<quint32>(idVal) : 0u;
+    if (!_sessions.contains(tid))
+        tid = _terminalIds.isEmpty() ? 0u : _terminalIds.first();
+    if (tid == 0)
+        return;
+
+    const QPointF pt(x, y);
+    double jump = 0.0;
+    if (_rtkLast.contains(tid))
+    {
+        const QPointF d = pt - _rtkLast.value(tid);
+        jump = std::sqrt(d.x() * d.x() + d.y() * d.y());
+    }
+    _rtkLast[tid] = pt;
+    _rtkJump[tid] = jump;
+    if (okYaw)
+        _rtkYawDeg[tid] = yawDeg;
+    QVector<QPointF> &tr = _rtkTrail[tid];
+    tr.append(pt);
+    if (tr.size() > 800)
+        tr.remove(0, 200);
+    _rtkFrames[tid] = _rtkFrames.value(tid) + 1;
+
+    // 打印策略：前 20 帧逐帧打（现场确认链路通），之后 2s 一行汇总；
+    // 单帧跳变 > 0.5m 另打一行（300ms 限流），这是现场要看见的核心现象
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 last = _rtkLastLogMs.value(tid, 0);
+    const int n = _rtkFrames.value(tid);
+    const bool bigJump = (jump > 0.5);
+    bool print = false;
+    if (n <= 20)
+        print = true;
+    else if (bigJump && now - last >= 300)
+        print = true;
+    else if (now - last >= 2000)
+        print = true;
+
+    if (print)
+    {
+        _rtkLastLogMs[tid] = now;
+        qInfo().noquote()
+            << QStringLiteral("[Rtk] 差分原始点 #%1 x=%2 y=%3 yaw=%4° 跳变=%5m%6")
+                   .arg(n)
+                   .arg(x, 0, 'f', 3)
+                   .arg(y, 0, 'f', 3)
+                   .arg(yawDeg, 0, 'f', 1)
+                   .arg(jump, 0, 'f', 3)
+                   .arg(bigJump ? QStringLiteral("  <-- 单帧跳变") : QString());
+    }
+}
+
+void SimController::clearRtkTrail()
+{
+    _rtkTrail.clear();
+    _rtkLast.clear();
+    _rtkJump.clear();
+    _rtkFrames.clear();
+    _rtkLastLogMs.clear();
+    qInfo() << "[Rtk] 差分原始点轨迹已清空";
 }
 
 void SimController::onDownHeartbeat()

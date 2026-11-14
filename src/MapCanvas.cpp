@@ -343,6 +343,56 @@ void SimMapCanvas::paintEvent(QPaintEvent *event)
         p.drawEllipse(poly.first(), 4, 4);
     }
 
+    // ---- 差分原始点（服务端在 MQ 上收到的 la 帧，原样叠加，不做 k/α 变换） ----
+    // 现场用途：走直线时看这一层是否在跳格。
+    //   空心紫圈 = 每一帧差分点；紫细线 = 帧间连线；
+    //   红线段   = 单帧位移 > 0.5m 的跳变（量化台阶就是这么现形的）
+    int rtkFrameCnt = 0;
+    double rtkJumpM = 0.0;
+    double rtkYawDeg = 0.0;
+    QPointF rtkLast;
+    if (_sim && _terminalId > 0)
+    {
+        const QVector<QPointF> rtk = _sim->rtkTrail(_terminalId);
+        rtkFrameCnt = _sim->rtkFrameCount(_terminalId);
+        rtkJumpM = _sim->rtkLastJumpM(_terminalId);
+        rtkYawDeg = _sim->rtkLastYawDeg(_terminalId);
+        rtkLast = _sim->rtkLastPoint(_terminalId);
+        if (!rtk.isEmpty())
+        {
+            p.save();
+            p.setClipRect(mapRect);
+            for (int i = 1; i < rtk.size(); ++i)
+            {
+                const QPointF a(cx + rtk.at(i - 1).x() * pxPerM,
+                                cy + rtk.at(i - 1).y() * pxPerM);
+                const QPointF b(cx + rtk.at(i).x() * pxPerM,
+                                cy + rtk.at(i).y() * pxPerM);
+                const QPointF d = b - a;
+                const double lenPx = std::sqrt(d.x() * d.x() + d.y() * d.y());
+                // 0.5m 以上的单帧跳变：红线段加粗，肉眼可数
+                if (lenPx > 0.5 * pxPerM)
+                    p.setPen(QPen(QColor(220, 70, 70, 200), 1.6));
+                else
+                    p.setPen(QPen(QColor(150, 110, 210, 130), 1));
+                p.drawLine(a, b);
+            }
+            p.setPen(QPen(QColor(140, 90, 200, 210), 1));
+            p.setBrush(Qt::NoBrush);
+            for (int i = 0; i < rtk.size(); ++i)
+                p.drawEllipse(QPointF(cx + rtk.at(i).x() * pxPerM,
+                                      cy + rtk.at(i).y() * pxPerM), 2.2, 2.2);
+            // 最新一帧：实心点 + 十字，便于确认"这一帧落在哪个格子"
+            p.setPen(QPen(QColor(120, 60, 190), 1.4));
+            p.setBrush(QColor(140, 90, 200, 200));
+            const QPointF lp(cx + rtkLast.x() * pxPerM, cy + rtkLast.y() * pxPerM);
+            p.drawEllipse(lp, 3.5, 3.5);
+            p.drawLine(QPointF(lp.x() - 8, lp.y()), QPointF(lp.x() + 8, lp.y()));
+            p.drawLine(QPointF(lp.x(), lp.y() - 8), QPointF(lp.x(), lp.y() + 8));
+            p.restore();
+        }
+    }
+
     // ---- 狗图标：位置圆点 + 朝向箭头（0=右/东，顺时针） ----
     if (hasPose)
     {
@@ -436,6 +486,51 @@ void SimMapCanvas::paintEvent(QPaintEvent *event)
             p.setPen(QColor(80, 88, 98));
             p.drawText(QPointF(compX - r + 2, compY + r + 12),
                        QStringLiteral("罗盘: 灰=地图系 绿=局部+x轴"));
+        }
+    }
+
+    // ---- 图例 + 差分点统计（地图左下角常驻） ----
+    {
+        const double boxW = 336.0;
+        const double boxH = 62.0;
+        const QRectF box(ox + 8, oy + mapPxH - boxH - 8, boxW, boxH);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(255, 255, 255, 226));
+        p.drawRect(box);
+        p.setPen(QPen(QColor(200, 206, 214), 1));
+        p.setBrush(Qt::NoBrush);
+        p.drawRect(box);
+
+        f.setPointSizeF(8.5);
+        p.setFont(f);
+        const double bx = box.left() + 8;
+        double by = box.top() + 15;
+        p.setPen(QColor(66, 133, 244));
+        p.drawText(QPointF(bx, by), QStringLiteral("蓝=终端地图轨迹"));
+        p.setPen(QColor(46, 160, 67));
+        p.drawText(QPointF(bx + 122, by), QStringLiteral("绿=局部坐标"));
+        by += 15;
+        p.setPen(QColor(140, 90, 200));
+        p.drawText(QPointF(bx, by), QStringLiteral("紫空心圈=差分原始点(原样)"));
+        p.setPen(QColor(220, 70, 70));
+        p.drawText(QPointF(bx + 186, by), QStringLiteral("红线=单帧跳变>0.5m"));
+        by += 15;
+        if (rtkFrameCnt > 0)
+        {
+            p.setPen(QColor(120, 80, 180));
+            p.drawText(QPointF(bx, by),
+                       QStringLiteral("差分帧 %1  最新(%2, %3)m  yaw=%4°  最近跳变 %5m")
+                           .arg(rtkFrameCnt)
+                           .arg(rtkLast.x(), 0, 'f', 2)
+                           .arg(rtkLast.y(), 0, 'f', 2)
+                           .arg(rtkYawDeg, 0, 'f', 1)
+                           .arg(rtkJumpM, 0, 'f', 3));
+        }
+        else
+        {
+            p.setPen(QColor(200, 90, 30));
+            p.drawText(QPointF(bx, by),
+                       QStringLiteral("服务端尚未收到 la 差分帧（检查 MQ 上是否有 la 消息）"));
         }
     }
 
