@@ -26,9 +26,7 @@ void SimController::printHelp()
     qInfo() << "  velocity <id> <vx> <vy> <yawRate>  速度控制";
     qInfo() << "  stop <id> [emergency]    停止（emergency=1急停）";
     qInfo() << "  param <id> <level>       速度档位 1=慢 2=正常 3=快";
-    qInfo() << "  mapreset <id>            以狗当前位姿重建地图参考（当前点=(0,0) 朝向=0°正东）";
-    qInfo() << "  mapline <id> <Bx> <By>   直线标定结束，B 为终点地图坐标";
-    qInfo() << "  mapcheck <id> <Bx> <By>  直线标定预检（只计算不修改，返回残余角/尺度）";
+    qInfo() << "  mapreset <id>            标定：当前差分位置=地图原点，当前差分朝向=地图0°（需狗朝东）";
     qInfo() << "  mapoff <id>              关闭地图坐标，回到原始局部坐标";
     qInfo() << "  auto                     切换到自动巡航模式";
     qInfo() << "  manual                   切换到手动命令模式";

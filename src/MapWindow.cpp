@@ -29,7 +29,7 @@ SimMapWindow::SimMapWindow(SimController *sim, double widthM, double heightM,
     , _canvas(new SimMapCanvas(this))
     , _calibPanel(new SimCalibPanel(sim, this))
 {
-    setWindowTitle(QStringLiteral("机器狗地图监视（%1m x %2m，(0,0)居中，朝向 0=正东 顺时针）+ 标定面板")
+    setWindowTitle(QStringLiteral("机器狗地图监视（%1m x %2m，差分坐标=地图坐标）")
                        .arg(widthM, 0, 'f', 0)
                        .arg(heightM, 0, 'f', 0));
     // 竖向地图（高>宽），窗口按高度优先布局；右侧再挂 560 宽的标定面板
@@ -51,9 +51,9 @@ SimMapWindow::SimMapWindow(SimController *sim, double widthM, double heightM,
     connect(_sim, &SimController::calibPanelUpdated,
             _calibPanel, &SimCalibPanel::onPanelUpdated);
 
-    QPushButton *resetBtn = new QPushButton(QStringLiteral("设为原点(0,0 朝向0°)"), this);
-    resetBtn->setToolTip(QStringLiteral("以狗当前位姿重建地图参考：当前位置=(0,0)，"
-                                        "当前朝向=0°(正东)。相当于 mapreset 命令。"));
+    QPushButton *resetBtn = new QPushButton(QStringLiteral("mapreset（设为原点+标定差分零位）"), this);
+    resetBtn->setToolTip(QStringLiteral("以狗当前位姿重建地图参考：当前位置=地图原点，"
+                                        "当前差分朝向=地图0°（需狗朝东摆放）。"));
     QPushButton *clearBtn = new QPushButton(QStringLiteral("清除轨迹"), this);
 
     QHBoxLayout *bar = new QHBoxLayout;
@@ -63,21 +63,12 @@ SimMapWindow::SimMapWindow(SimController *sim, double widthM, double heightM,
     bar->addWidget(clearBtn);
     bar->addStretch(1);
 
-    // 常用命令快捷按钮：目标点固定为地图 (2, 0)，与 mapcheck/mapline 命令等价
-    QPushButton *checkBtn = new QPushButton(QStringLiteral("mapcheck (2,0)"), this);
-    checkBtn->setToolTip(QStringLiteral("直线标定预检：只计算残余朝向和尺度，不修改参考。"
-                                        "等价于 mapcheck <id> 2 0"));
-    QPushButton *lineBtn = new QPushButton(QStringLiteral("mapline (2,0)"), this);
-    lineBtn->setToolTip(QStringLiteral("以地图 (2,0) 为终点做直线标定并使参考生效。"
-                                       "等价于 mapline <id> 2 0"));
     QPushButton *ctrlBtn = new QPushButton(QStringLiteral("取得控制权"), this);
     ctrlBtn->setToolTip(QStringLiteral("下发申请SDK控制权（姿态命令 action=10），"
                                        "等价于 control <id>"));
     QLabel *driveTip = new QLabel(QStringLiteral("W/S=前后 A/D=左右平移 Q/E=左右旋转（点击地图获取键盘焦点）"), this);
 
     QHBoxLayout *quickBar = new QHBoxLayout;
-    quickBar->addWidget(checkBtn);
-    quickBar->addWidget(lineBtn);
     quickBar->addWidget(ctrlBtn);
     quickBar->addWidget(driveTip);
     quickBar->addStretch(1);
@@ -85,7 +76,7 @@ SimMapWindow::SimMapWindow(SimController *sim, double widthM, double heightM,
     // 命令输入：与控制台共用 SimController::executeCommand，
     // 反馈（下发日志/错误提示）输出到运行控制台
     _cmdEdit = new QLineEdit(this);
-    _cmdEdit->setPlaceholderText(QStringLiteral("输入命令回车下发，如: fwd 1 1 / move 1 0 2 / help"));
+    _cmdEdit->setPlaceholderText(QStringLiteral("输入命令回车下发，如: move 1 2 0 / mapreset 1 / help"));
     QPushButton *sendBtn = new QPushButton(QStringLiteral("发送"), this);
     QHBoxLayout *cmdBar = new QHBoxLayout;
     cmdBar->addWidget(new QLabel(QStringLiteral("命令:"), this));
@@ -110,18 +101,6 @@ SimMapWindow::SimMapWindow(SimController *sim, double widthM, double heightM,
     connect(clearBtn, &QPushButton::clicked, this, &SimMapWindow::onClearTrail);
     connect(sendBtn, &QPushButton::clicked, this, &SimMapWindow::onSendCommand);
     connect(_cmdEdit, &QLineEdit::returnPressed, this, &SimMapWindow::onSendCommand);
-    connect(checkBtn, &QPushButton::clicked, this, [this]()
-    {
-        const quint32 id = static_cast<quint32>(_terminalBox->currentData().toInt());
-        if (id != 0)
-            _sim->sendMapCalib(id, DogProtocol::MC_CHECK_LINE, 2.0, 0.0);
-    });
-    connect(lineBtn, &QPushButton::clicked, this, [this]()
-    {
-        const quint32 id = static_cast<quint32>(_terminalBox->currentData().toInt());
-        if (id != 0)
-            _sim->sendMapCalib(id, DogProtocol::MC_END_LINE, 2.0, 0.0);
-    });
     connect(ctrlBtn, &QPushButton::clicked, this, [this]()
     {
         const quint32 id = static_cast<quint32>(_terminalBox->currentData().toInt());
