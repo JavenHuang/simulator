@@ -45,12 +45,10 @@ private:
     SimController *_sim;
     quint32 _curId;
 
-    QLabel *_title;      // 标题（终端 + 更新时间 + 帧号）
-    QLabel *_verdict;    // 判定
-    QLabel *_action;     // 下一步
-    QLabel *_summary;    // 达标 7/10
-    QVector<QLabel *> _checks;   // 10 项达标清单
-    QVector<QLabel *> _rows;     // 6 行详细数据
+    QLabel *_title;      // 标题（终端 + 时间）
+    QLabel *_verdict;    // 差分在线/断连
+    QLabel *_action;     // 地图参考状态
+    QLabel *_summary;    // 位置/角度一行
 
     QMap<quint32, QJsonObject> _cache;    // 每终端最后一份面板
     QMap<quint32, qint64> _lastMs;        // 收到时的墙钟时间
